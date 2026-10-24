@@ -174,10 +174,143 @@ def main():
     check_browser_transpilers_and_cpp_execution(exercises)
     print("[PASS] In-browser JS transpilers & C++ execution verified: 16/16 C++ solutions PASS, 16/16 C++ starters FAIL (RED), balanced parens/braces on all 64 transpiled snippets.")
 
-    # 5. Verify HTML and Markdown files exist and are non-empty
+    # 5. Verify actual generated HTML <script> blocks with tree-sitter-javascript AST + js2py ES5.1 DOM & execution
+    check_real_js_dom_and_execution()
+    print("[PASS] Real ES5.1 JS engine (js2py) + tree-sitter-javascript AST verified: Quiz, Code Labs (32/32 Python & C++ runs), and Study Guide render and pass in-browser.")
+
+    # 6. Verify HTML and Markdown files exist and are non-empty
     assert os.path.getsize("/home/droid/ml-memory-ladder/ml_memory_ladder.html") > 50000
     assert os.path.getsize("/home/droid/ml-memory-ladder/STUDY_GUIDE.md") > 40000
     print("[PASS] Generated files verified on disk.")
+
+
+def check_real_js_dom_and_execution():
+    import re
+    import js2py
+    import tree_sitter_javascript as tsjs
+    from tree_sitter import Language, Parser
+
+    html = open("/home/droid/ml-memory-ladder/ml_memory_ladder.html", encoding="utf-8").read()
+    scripts = re.findall(r"<script[^>]*>(.*?)</script>", html, re.S)
+    assert len(scripts) == 2, f"Expected 2 script blocks, found {len(scripts)}"
+
+    js_lang = Language(tsjs.language())
+    parser = Parser(js_lang)
+
+    def has_js_err(n):
+        if n.type == "ERROR" or n.is_missing:
+            return n
+        for c in n.children:
+            r = has_js_err(c)
+            if r is not None:
+                return r
+        return None
+
+    # Must-fail control on broken JS quote
+    broken_tree = parser.parse(b"var s = 'I don't know';")
+    assert has_js_err(broken_tree.root_node) is not None, "Must-fail JS AST control did not catch unescaped quote"
+
+    for idx, s in enumerate(scripts):
+        tree = parser.parse(s.encode("utf-8"))
+        err_node = has_js_err(tree.root_node)
+        assert err_node is None, (
+            f"JS AST ERROR in script {idx} line {err_node.start_point[0]+1}: {s.splitlines()[err_node.start_point[0]]}"
+        )
+        js2py.parse_js(s)
+
+    ctx = js2py.EvalJs()
+    ctx.execute("""
+    var window = this;
+    window.scrollTo = function(x, y) {};
+    var localStorage = {
+      _d: {},
+      getItem: function(k) { return Object.prototype.hasOwnProperty.call(this._d, k) ? this._d[k] : null; },
+      setItem: function(k, v) { this._d[k] = String(v); }
+    };
+    function makeEl(id) {
+      return {
+        id: id || "",
+        innerHTML: "",
+        value: "",
+        className: "",
+        disabled: false,
+        onclick: null,
+        oninput: null,
+        click: function() { if (this.onclick) this.onclick(); },
+        _attrs: {},
+        getAttribute: function(a) { return this._attrs[a] || "0"; },
+        querySelectorAll: function(sel) { return document.querySelectorAll(sel); }
+      };
+    }
+    var _els = {};
+    var document = {
+      getElementById: function(id) {
+        if (!_els[id]) _els[id] = makeEl(id);
+        return _els[id];
+      },
+      querySelectorAll: function(sel) {
+        var html = _els["app"] ? _els["app"].innerHTML : "";
+        var out = [];
+        if (sel === "#opts button") {
+          var rx = /data-o="([^"]+)"/g, m;
+          while ((m = rx.exec(html)) !== null) {
+            var b = makeEl("");
+            b._attrs["data-o"] = m[1];
+            out.push(b);
+          }
+        } else if (sel === "button[data-ex]") {
+          var rx2 = /data-ex="([^"]+)"/g, m2;
+          while ((m2 = rx2.exec(html)) !== null) {
+            var b2 = makeEl("");
+            b2._attrs["data-ex"] = m2[1];
+            out.push(b2);
+          }
+        } else if (sel === "button[data-goex]") {
+          var rx3 = /data-goex="([^"]+)"/g, m3;
+          while ((m3 = rx3.exec(html)) !== null) {
+            var b3 = makeEl("");
+            b3._attrs["data-goex"] = m3[1];
+            out.push(b3);
+          }
+        }
+        window._lastQueried = out;
+        return out;
+      }
+    };
+    """)
+    ctx.execute(scripts[0])
+    ctx.execute(scripts[1])
+    assert "ML Memory &amp; Cache Systems Ladder" in ctx.eval("_els.app.innerHTML")
+    ctx.execute("window._lastQueried[0].onclick();")
+    assert "Next Question" in ctx.eval("_els.fb.innerHTML")
+    ctx.execute("_els.tc.onclick();")
+    assert "Continue Next Unsolved Lab" in ctx.eval("_els.app.innerHTML")
+
+    n_ex = ctx.eval("window.MLEX.length")
+    for i in range(n_ex):
+        ex_id = ctx.eval(f"window.MLEX[{i}].id")
+        for lang in ("py", "cpp"):
+            ctx.execute(f"""
+            _els.tc.onclick();
+            var btns = window._lastQueried;
+            for (var bi = 0; bi < btns.length; bi++) {{
+              if (btns[bi].getAttribute("data-ex") === "{ex_id}") {{
+                btns[bi].onclick();
+                break;
+              }}
+            }}
+            if ("{lang}" === "py") _els.lp.onclick();
+            else _els.lc.onclick();
+            """)
+            ctx.execute("_els.run.onclick();")
+            out_starter = ctx.eval("_els.out.innerHTML")
+            assert "All visible &amp; hidden tests pass!" not in out_starter
+            assert "tests pass" in out_starter
+            ctx.execute("_els.show.onclick(); _els.copyfix.onclick();")
+            out_sol = ctx.eval("_els.out.innerHTML")
+            assert "All visible &amp; hidden tests pass!" in out_sol
+    ctx.execute("_els.tg.onclick();")
+    assert "Complete Interactive Reference &amp; Study Guide" in ctx.eval("_els.app.innerHTML")
 
 
 def check_balanced_brackets(js_code, label):

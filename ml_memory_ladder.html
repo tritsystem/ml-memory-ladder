@@ -231,15 +231,15 @@ function transpilePyToJs(pyCode, fnName){
       continue;
     }
     if(/^(if|elif|while|for|else)\b/.test(s)){
-      if(/^if\s+(.*):$/.test(s)){
-        var cond = RegExp.$1;
-        out.push('if (' + pyExprToJs(cond) + ') {');
+      var mIf = s.match(/^if\s+(.*):$/);
+      if(mIf){
+        out.push('if (' + pyExprToJs(mIf[1]) + ') {');
         stack.push(indent + 4);
         continue;
       }
-      if(/^elif\s+(.*):$/.test(s)){
-        var cond2 = RegExp.$1;
-        out.push('else if (' + pyExprToJs(cond2) + ') {');
+      var mElif = s.match(/^elif\s+(.*):$/);
+      if(mElif){
+        out.push('else if (' + pyExprToJs(mElif[1]) + ') {');
         stack.push(indent + 4);
         continue;
       }
@@ -248,13 +248,13 @@ function transpilePyToJs(pyCode, fnName){
         stack.push(indent + 4);
         continue;
       }
-      if(/^while\s+(.*):$/.test(s)){
-        var wcond = RegExp.$1;
-        out.push('while (' + pyExprToJs(wcond) + ') {');
+      var mWh = s.match(/^while\s+(.*):$/);
+      if(mWh){
+        out.push('while (' + pyExprToJs(mWh[1]) + ') {');
         stack.push(indent + 4);
         continue;
       }
-      var fm = s.match(/^for\s+([A-Za-z0-9_]+)\s+in\s+range\(([^)]+)\)\s*:$/);
+      var fm = s.match(/^for\s+([A-Za-z0-9_]+)\s+in\s+range\((.+)\)\s*:$/);
       if(fm){
         var v = fm[1], rarg = pyExprToJs(fm[2]);
         out.push('for (var '+v+' = 0; '+v+' < ('+rarg+'); '+v+'++) {');
@@ -322,7 +322,7 @@ function pyExprToJs(e){
   e = e.replace(/\[0\]\s*\*\s*\(([^)]+)\)/g, '_zeros($1)');
   e = e.replace(/\[0\]\s*\*\s*([A-Za-z0-9_]+)/g, '_zeros($1)');
   /* Handle list comprehensions: `[expr for v in range(n)]` or `[b for b in pool if b >= req_bytes]` */
-  var lcRange = e.match(/^\[\s*(.+?)\s+for\s+([A-Za-z0-9_]+)\s+in\s+range\(([^)]+)\)\s*\]$/);
+  var lcRange = e.match(/^\[\s*(.+?)\s+for\s+([A-Za-z0-9_]+)\s+in\s+range\((.+)\)\s*\]$/);
   if(lcRange){
     return '_lcRange(' + pyExprToJs(lcRange[3]) + ', function(' + lcRange[2] + '){ return ' + pyExprToJs(lcRange[1]) + '; })';
   }
@@ -360,8 +360,8 @@ function pyExprToJs(e){
   e = replaceCall(e, 'len', function(a, inner){ return '(' + inner + ').length'; });
   e = replaceCall(e, 'list', function(a, inner){ return '(' + inner + ').slice()'; });
   e = replaceCall(e, 'sum', function(a, inner){ return '_sum(' + inner + ')'; });
-  e = replaceCall(e, 'max', function(a, inner){ return a.length === 1 ? 'Math.max.apply(null, ' + a[0] + ')' : 'Math.max(' + a[0] + ', ' + a[1] + ')'; });
-  e = replaceCall(e, 'min', function(a, inner){ return a.length === 1 ? 'Math.min.apply(null, ' + a[0] + ')' : 'Math.min(' + a[0] + ', ' + a[1] + ')'; });
+  e = replaceCall(e, 'max', function(a, inner){ return '_max(' + inner + ')'; });
+  e = replaceCall(e, 'min', function(a, inner){ return '_min(' + inner + ')'; });
   e = replaceCall(e, 'round', function(a, inner){ return '_round(' + a[0] + ', ' + a[1] + ')'; });
   e = e.replace(/\.append\(/g, '.push(');
   e = e.replace(/\.remove\(/g, '._removeVal(');
@@ -377,6 +377,8 @@ var JS_HELPERS =
   "Object.prototype._updateDict = function(o){ if(o) for(var k in o) if(Object.prototype.hasOwnProperty.call(o,k)) this[k] = o[k]; };\n" +
   "function _zeros(n){ var a=[]; for(var i=0;i<n;i++) a.push(0); return a; }\n" +
   "function _sum(a){ var s=0; for(var i=0;i<a.length;i++) s+=a[i]; return s; }\n" +
+  "function _max(a,b){ if(arguments.length>1) return a>b?a:b; var m=a[0]; for(var i=1;i<a.length;i++) if(a[i]>m) m=a[i]; return m; }\n" +
+  "function _min(a,b){ if(arguments.length>1) return a<b?a:b; var m=a[0]; for(var i=1;i<a.length;i++) if(a[i]<m) m=a[i]; return m; }\n" +
   "function _round(v,d){ var p=Math.pow(10,d); return Math.round(v*p)/p; }\n" +
   "function _lcRange(n,fn){ var a=[]; for(var i=0;i<n;i++) a.push(fn(i)); return a; }\n" +
   "function _sumHistVal(h){ var s=0; for(var i=0;i<h.length;i++){ var x=h[i]; s += (x && typeof x==='object') ? x.val : x; } return s; }\n" +
@@ -701,7 +703,7 @@ function renderEx(ex){
     out.innerHTML = '<div class="why idk"><b>Reference Fix ('+(isPy?'Python':'C++')+'):</b><pre class="sol">'+esc(sol)+'</pre>' +
       '<button id="copyfix" class="go" style="margin-top:6px">Load Fix Into Editor &amp; Run</button></div>' + explainHtml(ex, true);
     var cf = document.getElementById('copyfix');
-    if(cf) cf.onclick = function(){ ta.value = sol; ta.oninput(); document.getElementById('run').click(); };
+    if(cf) cf.onclick = function(){ ta.value = sol; ta.oninput(); document.getElementById('run').onclick(); };
   };
   document.getElementById('reset').onclick = function(){
     ta.value = starter; ta.oninput(); out.innerHTML = '';
@@ -808,7 +810,7 @@ function render(){
   var again=(bx(cur.id)>=0&&bx(cur.id)<2)?'<span class="tag">spaced review</span>':'';
   h+='<div class="card"><div class="small">'+again+'<span class="tag">Level '+q.l+': '+esc(L[q.l-1])+'</span></div><p class="q">'+esc(q.q)+'</p><div id="opts">';
   for(var i=0;i<4;i++)h+='<button data-o="'+cur.order[i]+'">'+esc(q.o[cur.order[i]])+'</button>';
-  h+='<button class="idk" data-o="-1">I don't know yet (explain it to me in plain words)</button></div><div id="fb"></div></div>';
+  h+='<button class="idk" data-o="-1">I don\'t know yet (explain it to me in plain words)</button></div><div id="fb"></div></div>';
   app.innerHTML=h;
   var b=document.querySelectorAll('#opts button');
   for(var k=0;k<b.length;k++){(function(el){el.onclick=function(){answer(parseInt(el.getAttribute('data-o'),10));};})(b[k]);}
